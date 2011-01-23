@@ -5,7 +5,25 @@ growls the contents using growlnotify on OSX
 
 ## Usage
 
-FIXME: write
+example ~/.howler.clj
+
+{:recipient-icons {"#haskell" "/Users/hiredman/haskell.png"
+                   "#scala" "/Users/hiredman/scala-icon-50x50.png"
+                   "#clojure" "/Users/hiredman/clojure.png"}
+ :access-key "some key"
+ :secret-key "some secret key"
+ :secure? false
+ :queue "queuename"
+ :ignored-users #{"someannoyingugy"}
+ :ignored-channels #{"#somechannelyoudon'tcareabout"}
+
+run like:
+
+java -jar Howler-1.0.0-SNAPSHOT-standalone.jar -consume
+
+or
+
+java -jar Howler-1.0.0-SNAPSHOT-standalone.jar -produce queuename somekey somesecretkey $HOME/raw.log
 
 ## Installation
 
