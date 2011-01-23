@@ -166,20 +166,25 @@
         (recieve-single-message msg)
         [queue (inc throttle)]))))
 
-(defmethod -main "-consume" [_]
-  (let [[cfg except] ((maybe config))]
+(defn with-env [f]
+  (let [[cfg exception] ((maybe config))]
     (binding [*config* (if exception {} cfg)
               *growler* (when-not (growlnotify?)
-                          (clj-growl/make-growler (:growl-password cfg)
-                                                  "Howler"
-                                                  ["message" true]))]
-      (letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
-              (run [queue throttle]
-                (let [[[queue throttle] exception] ((maybe handle-message!)
-                                                    queue throttle)]
-                  (if exception
-                    (do
-                      (.printStacktrace exception)
-                      (partial run (make-queue) throttle))
-                    (partial run queue throttle))))]
-        (trampoline run (make-queue) throttle-start)))))
+                          (clj-growl/make-growler
+                           (:growl-password cfg)
+                           "Howler"
+                           ["message" true]))]
+      (f))))
+
+(defmethod -main "-consume" [_]
+  (with-env
+    #(letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
+             (run [queue throttle]
+               (let [[[queue throttle] exception] ((maybe handle-message!)
+                                                   queue throttle)]
+                 (if exception
+                   (do
+                     (.printStacktrace exception)
+                     (partial run (make-queue) throttle))
+                   (partial run queue throttle))))]
+       (trampoline run (make-queue) throttle-start))))
