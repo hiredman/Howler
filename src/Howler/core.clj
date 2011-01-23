@@ -112,11 +112,14 @@
      identity)
    x))
 
-(defn P [t]
-  (long (* 1000 (+ (Math/pow t 5) (/ 1 (+ 1 (Math/pow Math/E (- t))))))))
+(defn E [c]
+  (mod (* 1000 (/ (- (Math/pow 2 c) 1) 2)) 63500))
+
+(def throttle-start 1)
 
 (defn handle-message! [queue throttle]
-  (Thread/sleep (P throttle))
+  (println queue throttle (E throttle))
+  (Thread/sleep (E throttle))
   (letfn [(f [m]
             (when-not (dropable? m)
               ((comp growl! add-icon)
@@ -127,12 +130,10 @@
       (try
         ((comp f read-string)
          (.getMessageBody msg))
-        [queue 0]
+        [queue throttle-start]
         (finally
          (.deleteMessage queue msg)))
-      (if (> throttle 2)
-        [queue 2]
-        [queue (inc throttle)]))))
+      [queue (inc throttle)])))
 
 (defmethod -main "-consume" [_]
   (binding [*config* (let [[cfg exception] ((maybe config))]
@@ -146,4 +147,4 @@
                     (println exception)
                     (partial run (make-queue) throttle))
                   (partial run queue throttle))))]
-      (trampoline run (make-queue) 0))))
+      (trampoline run (make-queue) throttle-start))))
