@@ -1,5 +1,6 @@
 (ns Howler.core
   (:use [Howler.parser :only [parse-irc-line]])
+  (:require [clj-growl.core :as clj-growl])
   (:import (com.xerox.amazonws.sqs2 MessageQueue
                                     Message
                                     SQSUtils
@@ -64,16 +65,23 @@
                   (partial run queue))))]
       (trampoline run (make-queue)))))
 
+(def ^{:dynamic true} *growler* nil)
+
 (defn process-args [m]
   (mapcat (fn [[flag value]] [(format "--%s" (name flag)) value]) m))
 
+(defn growlnotify? []
+  (.exists (File. "/usr/local/bin/growlnotify")))
+
 (defn growl! [m]
-  (-> (Runtime/getRuntime)
-      (.exec
-       (into-array
-        String
-        (cons "/usr/local/bin/growlnotify" (process-args m))))
-      (doto .waitFor)))
+  (if *growler*
+    (*growler* "message" (:title m) (:message m))
+    (-> (Runtime/getRuntime)
+        (.exec
+         (into-array
+          String
+          (cons "/usr/local/bin/growlnotify" (process-args m))))
+        (doto .waitFor))))
 
 (def ^{:dynamic true} *config* nil)
 
@@ -134,16 +142,44 @@
          (.deleteMessage queue msg)))
       [queue (inc throttle)])))
 
+(defn handle-message! [queue throttle]
+  (Thread/sleep (E throttle))
+  (letfn [(growl-message [m]
+            (when-not (dropable? m)
+              ((comp growl! add-icon)
+               {:title (:sender m)
+                :name "Howler"
+                :message (:msg m)} m)))
+          (recieve-single-message [msg]
+            (try
+              ((comp growl-message read-string)
+               (.getMessageBody msg))
+              [queue throttle-start]
+              (finally
+               (.deleteMessage queue msg))))]
+    (if (zero? (mod throttle 12))
+      (let [msg-count (.getApproximateNumberOfMessages queue)]
+        (doseq [msg (.receiveMessages queue msg-count)]
+          (recieve-single-message msg))
+        [queue throttle-start])
+      (if-let [msg (.receiveMessage queue)]
+        (recieve-single-message msg)
+        [queue (inc throttle)]))))
+
 (defmethod -main "-consume" [_]
-  (binding [*config* (let [[cfg exception] ((maybe config))]
-                       (if exception {} cfg))]
-    (letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
-            (run [queue throttle]
-              (let [[[queue throttle] exception] ((maybe handle-message!)
-                                                  queue throttle)]
-                (if exception
-                  (do
-                    (println exception)
-                    (partial run (make-queue) throttle))
-                  (partial run queue throttle))))]
-      (trampoline run (make-queue) throttle-start))))
+  (let [[cfg except] ((maybe config))]
+    (binding [*config* (if exception {} cfg)
+              *growler* (when-not (growlnotify?)
+                          (clj-growl/make-growler (:growl-password cfg)
+                                                  "Howler"
+                                                  ["message" true]))]
+      (letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
+              (run [queue throttle]
+                (let [[[queue throttle] exception] ((maybe handle-message!)
+                                                    queue throttle)]
+                  (if exception
+                    (do
+                      (.printStacktrace exception)
+                      (partial run (make-queue) throttle))
+                    (partial run queue throttle))))]
+        (trampoline run (make-queue) throttle-start)))))
