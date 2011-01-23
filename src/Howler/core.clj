@@ -118,7 +118,6 @@
 (def throttle-start 1)
 
 (defn handle-message! [queue throttle]
-  (println queue throttle (E throttle))
   (Thread/sleep (E throttle))
   (letfn [(f [m]
             (when-not (dropable? m)
