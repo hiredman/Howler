@@ -184,7 +184,7 @@
                                                    queue throttle)]
                  (if exception
                    (do
-                     (.printStacktrace exception)
+                     (.printStackTrace exception)
                      (partial run (make-queue) throttle))
                    (partial run queue throttle))))]
        (trampoline run (make-queue) throttle-start))))
