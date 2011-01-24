@@ -60,7 +60,7 @@
               (let [[queue exception] ((maybe queue-line!) queue)]
                 (if exception
                   (do
-                    (println exception)
+                    (.printStackTrace exception)
                     (partial run (make-queue)))
                   (partial run queue))))]
       (trampoline run (make-queue)))))
@@ -125,46 +125,37 @@
 
 (def throttle-start 1)
 
-(defn handle-message! [queue throttle]
-  (Thread/sleep (E throttle))
-  (letfn [(f [m]
-            (when-not (dropable? m)
-              ((comp growl! add-icon)
-               {:title (:sender m)
-                :name "Howler"
-                :message (:msg m)} m)))]
-    (if-let [msg (.receiveMessage queue)]
-      (try
-        ((comp f read-string)
-         (.getMessageBody msg))
-        [queue throttle-start]
-        (finally
-         (.deleteMessage queue msg)))
-      [queue (inc throttle)])))
+(defn growl-message! [m]
+  (when-not (dropable? m)
+    ((comp growl! add-icon)
+     {:title (:sender m)
+      :name "Howler"
+      :message (:msg m)} m)))
+
+(defn msg-count [queue]
+  (let [msg-count (.getApproximateNumberOfMessages queue)
+        msg-count (if (> msg-count 10) 10 msg-count)
+        msg-count (if (zero? msg-count) 1 msg-count)]
+    msg-count))
+
+(defn recieve-single-message! [msg queue]
+  (try
+    ((comp growl-message! read-string)
+     (.getMessageBody msg))
+    [queue throttle-start]
+    (finally
+     (.deleteMessage queue msg))))
 
 (defn handle-message! [queue throttle]
   (Thread/sleep (E throttle))
-  (letfn [(growl-message [m]
-            (when-not (dropable? m)
-              ((comp growl! add-icon)
-               {:title (:sender m)
-                :name "Howler"
-                :message (:msg m)} m)))
-          (recieve-single-message [msg]
-            (try
-              ((comp growl-message read-string)
-               (.getMessageBody msg))
-              [queue throttle-start]
-              (finally
-               (.deleteMessage queue msg))))]
-    (if (zero? (mod throttle 12))
-      (let [msg-count (.getApproximateNumberOfMessages queue)]
-        (doseq [msg (.receiveMessages queue msg-count)]
-          (recieve-single-message msg))
-        [queue throttle-start])
-      (if-let [msg (.receiveMessage queue)]
-        (recieve-single-message msg)
-        [queue (inc throttle)]))))
+  (if (zero? (mod throttle 12))
+    (reduce
+     (fn [[queue _] msg] (recieve-single-message! msg queue))
+     [queue (inc throttle)]
+     (.receiveMessages queue (msg-count queue)))
+    (if-let [msg (.receiveMessage queue)]
+      (recieve-single-message! msg queue)
+      [queue (inc throttle)])))
 
 (defn with-env [f]
   (let [[cfg exception] ((maybe config))]
