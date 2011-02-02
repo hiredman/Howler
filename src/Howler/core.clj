@@ -1,5 +1,6 @@
 (ns Howler.core
-  (:use [Howler.parser :only [parse-irc-line]])
+  (:use [Howler.parser :only [parse-irc-line]]
+        [clojure.java.io :only [file]])
   (:require [clj-growl.core :as clj-growl])
   (:import (com.xerox.amazonws.sqs2 MessageQueue
                                     Message
@@ -112,7 +113,12 @@
       (ignored-user? (:sender m))))
 
 (defn icon [name]
-  (-> *config* :recipient-icons (get name)))
+  (let [i (-> *config* :recipient-icons (get name))]
+    (if (.isDirectory (file i))
+      (first (shuffle (map #(.getAbsolutePath %) (rest (file-seq (file i))))))
+      (if (coll? i)
+        (first (shuffle i))
+        i))))
 
 (defn add-icon [x m]
   ((if-let [icon (icon (:recipient m))]
