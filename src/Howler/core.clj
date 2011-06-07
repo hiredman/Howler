@@ -77,12 +77,15 @@
 (defn growl! [m]
   (if *growler*
     (*growler* "message" (:title m) (:message m))
-    (-> (Runtime/getRuntime)
-        (.exec
-         (into-array
-          String
-          (cons "/usr/local/bin/growlnotify" (process-args m))))
-        (doto .waitFor))))
+    (future
+      (-> (Runtime/getRuntime)
+          (.exec
+           (into-array
+            String
+            (list* "/usr/local/bin/growlnotify"
+                   "-w"
+                   (process-args m))))
+          (doto .waitFor)))))
 
 (def ^{:dynamic true} *config* nil)
 
