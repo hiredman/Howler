@@ -157,7 +157,7 @@
 
 (defn handle-message! [queue throttle]
   (Thread/sleep (E throttle))
-  (if (zero? (mod throttle 12))
+  (if (= 1 throttle)
     (reduce
      (fn [[queue _] msg] (recieve-single-message! msg queue))
      [queue (inc throttle)]
@@ -185,6 +185,6 @@
                  (if exception
                    (do
                      (.printStackTrace exception)
-                     (partial run (make-queue) throttle))
+                     (partial run (make-queue) throttle-start))
                    (partial run queue throttle))))]
        (trampoline run (make-queue) throttle-start))))
