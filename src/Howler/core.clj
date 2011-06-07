@@ -116,9 +116,15 @@
       (ignored-user? (:sender m))))
 
 (defn icon [name]
-  (let [i (-> *config* :recipient-icons (get name))]
+  (when-let [i (-> *config* :recipient-icons (get name))]
     (if (.isDirectory (file i))
-      (first (shuffle (map #(.getAbsolutePath %) (rest (file-seq (file i))))))
+      (->> (file i)
+           file-seq
+           (remove #(.isDirectory %))
+           (remove #(.startsWith (.getName %) "."))
+           (map #(.getAbsolutePath %))
+           shuffle
+           first)
       (if (coll? i)
         (first (shuffle i))
         i))))
