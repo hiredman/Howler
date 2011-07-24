@@ -32,7 +32,16 @@
   (secure? [acct] (:secure? acct false)))
 
 (defn connect-to-queue [account queue-name]
-  (.getOrCreateMessageQueue (queue-service account) queue-name))
+  (letfn [(f []
+            (try
+              (.getOrCreateMessageQueue (queue-service account) queue-name)
+              (catch Exception e
+                (.printStackTrace e)
+                (Thread/sleep 1000))))]
+    (loop [x nil]
+      (if-not x
+        (recur (f))
+        x))))
 
 (defmulti -main (fn [x & _] x))
 
@@ -128,6 +137,8 @@
       (if (coll? i)
         (first (shuffle i))
         i))))
+
+;; 
 
 (defn add-icon [x m]
   ((if-let [icon (icon (:recipient m))]
