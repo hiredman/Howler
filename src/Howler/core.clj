@@ -1,12 +1,9 @@
 (ns Howler.core
   (:use [Howler.parser :only [parse-irc-line]]
-        [clojure.java.io :only [file]])
+        [clojure.java.io :only [file]]
+        [vespa.crabro :only [message-bus]])
   (:require [clj-growl.core :as clj-growl])
-  (:import (com.xerox.amazonws.sqs2 MessageQueue
-                                    Message
-                                    SQSUtils
-                                    QueueService)
-           (java.io FileReader
+  (:import (java.io FileReader
                     BufferedReader
                     File
                     PushbackReader))
@@ -55,16 +52,12 @@
 (defmethod -main "-produce" [x queue-name aws-key aws-secret-key filename]
   (let [rdr (doto (-> filename FileReader. BufferedReader.)
               (-> (.skip (.length (File. filename)))))]
-    (letfn [(make-queue []
-              (connect-to-queue {:access-key aws-key
-                                 :secret-key aws-secret-key
-                                 :secure? false}
-                                queue-name))
+    (letfn [(make-queue [] (message-bus))
             (queue-line! [queue]
               (Thread/sleep 500)
               (when-let [line (parse-irc-line (.readLine rdr))]
                 (let [ts (System/currentTimeMillis)]
-                  (.sendMessage queue (-> line (assoc :timestamp ts) pr-str))))
+                  (send-to queue queue-name (-> line (assoc :timestamp ts) pr-str))))
               queue)
             (run [queue]
               (let [[queue exception] ((maybe queue-line!) queue)]
@@ -178,14 +171,11 @@
 (defn handle-message! [queue throttle]
   (println "@handle-message!" queue throttle (E throttle))
   (Thread/sleep (E throttle))
-  (if (= 1 throttle)
-    (reduce
-     (fn [[queue _] msg] (recieve-single-message! msg queue))
-     [queue (inc throttle)]
-     (.receiveMessages queue (msg-count queue)))
-    (if-let [msg (.receiveMessage queue)]
-      (recieve-single-message! msg queue)
-      [queue (inc throttle)])))
+  (let [result (recieve-from queue (:queue *config*)
+                             #(recieve-single-message! % queue))]
+    (if (= :vespa.crabro/timeout result)
+      [queue (inc throttle)]
+      result)))
 
 (defn with-env [f]
   (let [[cfg exception] ((maybe config))]
@@ -205,7 +195,7 @@
            (growl-message! m)
            (Thread/sleep 500)))))
   (with-env
-    #(letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
+    # (letfn [(make-queue [] (message-bus))
              (run [queue throttle]
                (let [[[queue throttle] exception] ((maybe handle-message!)
                                                    queue throttle)]
