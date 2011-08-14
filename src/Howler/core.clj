@@ -151,6 +151,8 @@
 
 (def throttle-start 1)
 
+(def Q (java.util.concurrent.LinkedBlockingQueue.))
+
 (defn growl-message! [m]
   (when-not (dropable? m)
     ((comp growl! add-icon)
@@ -165,14 +167,16 @@
     msg-count))
 
 (defn recieve-single-message! [msg queue]
+  (println msg queue)
   (try
-    ((comp growl-message! read-string)
+    ((comp #(.put Q %) #(doto % println) read-string)
      (.getMessageBody msg))
     [queue throttle-start]
     (finally
      (.deleteMessage queue msg))))
 
 (defn handle-message! [queue throttle]
+  (println "@handle-message!" queue throttle (E throttle))
   (Thread/sleep (E throttle))
   (if (= 1 throttle)
     (reduce
@@ -194,6 +198,12 @@
       (f))))
 
 (defmethod -main "-consume" [_]
+  (future
+    (with-env
+      #(while true
+         (let [m (.take Q)]
+           (growl-message! m)
+           (Thread/sleep 500)))))
   (with-env
     #(letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
              (run [queue throttle]
