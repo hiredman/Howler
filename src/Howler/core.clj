@@ -9,7 +9,8 @@
            (java.io FileReader
                     BufferedReader
                     File
-                    PushbackReader))
+                    PushbackReader)
+           (java.util.concurrent Semaphore))
   (:gen-class))
 
 (defprotocol AWSAccount
@@ -83,18 +84,22 @@
 (defn growlnotify? []
   (.exists (File. "/usr/local/bin/growlnotify")))
 
+(def limiter (Semaphore. 100))
+
 (defn growl! [m]
   (if *growler*
     (*growler* "message" (:title m) (:message m))
     (future
-      (-> (Runtime/getRuntime)
-          (.exec
-           (into-array
-            String
-            (list* "/usr/local/bin/growlnotify"
-                   "-w"
-                   (process-args m))))
-          (doto .waitFor)))))
+      (try
+        (.acquire limiter)
+        (-> (Runtime/getRuntime)
+            (.exec
+             (into-array
+              String
+              (list* growl-notify "-w" (process-args m))))
+            (doto .waitFor))
+        (finally
+         (.release limiter))))))
 
 (def ^{:dynamic true} *config* nil)
 
