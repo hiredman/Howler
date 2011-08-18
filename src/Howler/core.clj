@@ -81,8 +81,10 @@
 (defn process-args [m]
   (mapcat (fn [[flag value]] [(format "--%s" (name flag)) value]) m))
 
+(def growl-notify "/usr/local/bin/growlnotify")
+
 (defn growlnotify? []
-  (.exists (File. "/usr/local/bin/growlnotify")))
+  (.exists (File. growl-notify)))
 
 (def limiter (Semaphore. 100))
 
