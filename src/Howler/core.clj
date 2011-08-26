@@ -189,7 +189,10 @@
     (reduce
      (fn [[queue _] msg] (recieve-single-message! msg queue))
      [queue (inc throttle)]
-     (.receiveMessages queue (msg-count queue)))
+     ((fn this []
+        (lazy-seq
+         (when-let [msgs (seq (.receiveMessages queue (msg-count queue)))]
+           (concat msgs (this)))))))
     (if-let [msg (.receiveMessage queue)]
       (recieve-single-message! msg queue)
       [queue (inc throttle)])))
