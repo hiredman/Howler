@@ -90,14 +90,18 @@
 (defn growlnotify? []
   (.exists (File. growl-notify)))
 
-(def limiter (Semaphore. 100))
+(defn acquire [thing]
+  (.acquire (:lock (meta thing))))
 
-(defn growl! [m]
+(defn release [thing]
+  (.release (:lock (meta thing))))
+
+(defn ^{:lock (Semaphore. 100)} growl! [m]
   (if *growler*
     (*growler* "message" (:title m) (:message m))
     (future
       (try
-        (.acquire limiter)
+        (acquire #'growl!)
         (let [proc (-> (Runtime/getRuntime)
                        (.exec
                         (into-array
@@ -110,7 +114,7 @@
               (log/info t "process took too long")
               (.destroy proc))))
         (finally
-         (.release limiter))))))
+         (release #'growl!))))))
 
 (def ^{:dynamic true} *config* nil)
 
