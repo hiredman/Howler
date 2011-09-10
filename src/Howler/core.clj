@@ -1,7 +1,10 @@
 (ns Howler.core
   (:use [Howler.parser :only [parse-irc-line]]
-        [clojure.java.io :only [file]])
-  (:require [clj-growl.core :as clj-growl])
+        [clojure.java.io :only [file copy]])
+  (:require [clj-growl.core :as clj-growl]
+            [clj-http.client :as http]
+            [clojure.tools.logging :as log]
+            [storage.client :as storage])
   (:import (com.xerox.amazonws.sqs2 MessageQueue
                                     Message
                                     SQSUtils
@@ -10,7 +13,8 @@
                     BufferedReader
                     File
                     PushbackReader)
-           (java.util.concurrent Semaphore))
+           (java.util.concurrent Semaphore)
+           (org.apache.commons.codec.digest DigestUtils))
   (:gen-class))
 
 (defprotocol AWSAccount
@@ -94,12 +98,17 @@
     (future
       (try
         (.acquire limiter)
-        (-> (Runtime/getRuntime)
-            (.exec
-             (into-array
-              String
-              (list* growl-notify "-w" (process-args m))))
-            (doto .waitFor))
+        (let [proc (-> (Runtime/getRuntime)
+                       (.exec
+                        (into-array
+                         String
+                         (list* growl-notify "-w" (process-args m)))))]
+          (Thread/sleep (* 10 1000))
+          (try
+            (.exitValue proc)
+            (catch Throwable t
+              (log/info t "process took too long")
+              (.destroy proc))))
         (finally
          (.release limiter))))))
 
@@ -131,24 +140,51 @@
       (ignored-channel? (:recipient m))
       (ignored-user? (:sender m))))
 
-(defn icon [name]
-  (when-let [i (-> *config* :recipient-icons (get name))]
-    (if (.isDirectory (file i))
-      (->> (file i)
-           file-seq
-           (remove #(.isDirectory %))
-           (remove #(.startsWith (.getName %) "."))
-           (map #(.getAbsolutePath %))
-           shuffle
-           first)
-      (if (coll? i)
-        (first (shuffle i))
-        i))))
+(defn icon [m]
+  (try
+    (letfn [(f []
+              (let [recipient-icons (merge (:recipient-icons *config*)
+                                           (storage/get :recipient-icons))]
+                (if-let [i (get recipient-icons (:recipient m))]
+                  (if (.isDirectory (file i))
+                    (->> (file i)
+                         file-seq
+                         (remove #(.isDirectory %))
+                         (remove #(.startsWith (.getName %) "."))
+                         (map #(.getAbsolutePath %))
+                         shuffle
+                         first)
+                    (if (coll? i)
+                      (first (shuffle i))
+                      i)))))]
+      (.mkdirs (file "/tmp/gravs"))
+      (if (.exists (file "/tmp/gravs/" (str (:sender m) ".jpg")))
+        (.getAbsolutePath (file "/tmp/gravs/" (str (:sender m) ".jpg")))
+        (let [gravatr-map (merge (:gravatars *config*)
+                                 (storage/get :nick->email))]
+          (if (get gravatr-map (:sender m))
+            (try
+              (let [h (-> (get gravatr-map (:sender m))
+                          (.trim)
+                          (.toLowerCase)
+                          (DigestUtils/md5Hex))]
+                (copy (:body (http/get
+                              (str "http://www.gravatar.com/avatar/" h)
+                              {:as :byte-array}))
+                      (file "/tmp/gravs/" (str (:sender m) ".jpg"))))
+              (icon m)
+              (catch Exception e
+                (.printStackTrace e)
+                (f)))
+            (f)))))
+    (catch Exception e
+      (.printStackTrace e)
+      "nil")))
 
-;; 
+;;
 
 (defn add-icon [x m]
-  ((if-let [icon (icon (:recipient m))]
+  ((if-let [icon (icon m)]
      #(assoc % :image icon)
      identity)
    x))
@@ -157,8 +193,6 @@
   (mod (* 1000 (/ (- (Math/pow 2 c) 1) 2)) 63500))
 
 (def throttle-start 1)
-
-(def Q (java.util.concurrent.LinkedBlockingQueue.))
 
 (defn growl-message! [m]
   (when-not (dropable? m)
@@ -174,24 +208,25 @@
     msg-count))
 
 (defn recieve-single-message! [msg queue]
-  (println msg queue)
+  (log/info "received message" (.getMessageBody msg) queue)
   (try
-    ((comp #(.put Q %) #(doto % println) read-string)
+    ((comp growl-message! read-string)
      (.getMessageBody msg))
     [queue throttle-start]
     (finally
      (.deleteMessage queue msg))))
 
 (defn handle-message! [queue throttle]
-  (println "@handle-message!" queue throttle (E throttle))
+  (log/info "@handle-message!" queue throttle (E throttle))
   (Thread/sleep (E throttle))
   (if (= 1 throttle)
     (reduce
      (fn [[queue _] msg] (recieve-single-message! msg queue))
      [queue (inc throttle)]
      ((fn this []
+        (log/info "generating message seq")
         (lazy-seq
-         (when-let [msgs (seq (.receiveMessages queue (msg-count queue)))]
+         (when-let [msgs (seq (.receiveMessages queue 10))]
            (concat msgs (this)))))))
     (if-let [msg (.receiveMessage queue)]
       (recieve-single-message! msg queue)
@@ -208,12 +243,6 @@
       (f))))
 
 (defmethod -main "-consume" [_]
-  (future
-    (with-env
-      #(while true
-         (let [m (.take Q)]
-           (growl-message! m)
-           (Thread/sleep 500)))))
   (with-env
     #(letfn [(make-queue [] (connect-to-queue *config* (:queue *config*)))
              (run [queue throttle]
@@ -221,7 +250,7 @@
                                                    queue throttle)]
                  (if exception
                    (do
-                     (.printStackTrace exception)
+                     (log/error exception "something broke something")
                      (partial run (make-queue) throttle-start))
                    (partial run queue throttle))))]
        (trampoline run (make-queue) throttle-start))))
