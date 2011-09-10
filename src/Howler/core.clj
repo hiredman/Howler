@@ -106,7 +106,7 @@
                           (into-array
                            String
                            (list* growl-notify "-w" (process-args m))))]
-          (Thread/sleep (* 10 1000))
+          (Thread/sleep (* 60 1000))
           (try
             (.exitValue proc)
             (catch Throwable t
