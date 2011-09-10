@@ -102,11 +102,10 @@
     (future
       (try
         (acquire #'growl!)
-        (let [proc (-> (Runtime/getRuntime)
-                       (.exec
-                        (into-array
-                         String
-                         (list* growl-notify "-w" (process-args m)))))]
+        (let [proc (.exec (Runtime/getRuntime)
+                          (into-array
+                           String
+                           (list* growl-notify "-w" (process-args m))))]
           (Thread/sleep (* 10 1000))
           (try
             (.exitValue proc)
@@ -145,42 +144,44 @@
       (ignored-user? (:sender m))))
 
 (defn icon [m]
+  (.mkdirs (file "/tmp/gravs"))
   (try
-    (letfn [(f []
+    (letfn [(remove-hidden-files [files]
+              (remove #(.startsWith (.getName %) ".") files))
+            (pick-an-icon-file [i]
+              (->> (file-seq (file i))
+                   (remove #(.isDirectory %))
+                   (remove-hidden-files)
+                   (map #(.getAbsolutePath %))
+                   (shuffle)
+                   (first)))
+            (f [m]
               (let [recipient-icons (merge (:recipient-icons *config*)
                                            (storage/get :recipient-icons))]
-                (if-let [i (get recipient-icons (:recipient m))]
-                  (if (.isDirectory (file i))
-                    (->> (file i)
-                         file-seq
-                         (remove #(.isDirectory %))
-                         (remove #(.startsWith (.getName %) "."))
-                         (map #(.getAbsolutePath %))
-                         shuffle
-                         first)
-                    (if (coll? i)
-                      (first (shuffle i))
-                      i)))))]
-      (.mkdirs (file "/tmp/gravs"))
+                (when-let [icn (get recipient-icons (:recipient m))]
+                  (cond
+                   (.isDirectory (file icn)) (pick-an-icon-file icn)
+                   (coll? icn) (first (shuffle icn))
+                   :else icn))))
+            (fetch-gravatar [m gravatr-map]
+              (try
+                (let [h (-> gravatr-map (get (:sender m))
+                            (.trim) (.toLowerCase) (DigestUtils/md5Hex))]
+                  (copy (:body (http/get
+                                (str "http://www.gravatar.com/avatar/" h)
+                                {:as :byte-array}))
+                        (file "/tmp/gravs/" (str (:sender m) ".jpg"))))
+                (icon m)
+                (catch Exception e
+                  (.printStackTrace e)
+                  (f))))]
       (if (.exists (file "/tmp/gravs/" (str (:sender m) ".jpg")))
         (.getAbsolutePath (file "/tmp/gravs/" (str (:sender m) ".jpg")))
         (let [gravatr-map (merge (:gravatars *config*)
                                  (storage/get :nick->email))]
           (if (get gravatr-map (:sender m))
-            (try
-              (let [h (-> (get gravatr-map (:sender m))
-                          (.trim)
-                          (.toLowerCase)
-                          (DigestUtils/md5Hex))]
-                (copy (:body (http/get
-                              (str "http://www.gravatar.com/avatar/" h)
-                              {:as :byte-array}))
-                      (file "/tmp/gravs/" (str (:sender m) ".jpg"))))
-              (icon m)
-              (catch Exception e
-                (.printStackTrace e)
-                (f)))
-            (f)))))
+            (fetch-gravatar m gravatr-map)
+            (f m)))))
     (catch Exception e
       (.printStackTrace e)
       "nil")))
